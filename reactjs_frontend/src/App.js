@@ -30,7 +30,9 @@ function App() {
   const API_BASE = useMemo(() => {
     const ENV_BASE = (process.env.REACT_APP_API_BASE || '').trim();
     const DEFAULT_CLOUD_BASE = 'https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001';
-    const primary = (ENV_BASE || DEFAULT_CLOUD_BASE).replace(/\/*$/, '');
+    // Normalize: remove any accidental trailing braces or slashes to prevent malformed URLs like '/}'.
+    const sanitized = (ENV_BASE || DEFAULT_CLOUD_BASE).replace(/[}\s]+$/g, '').replace(/\/*$/, '');
+    const primary = sanitized;
     if (primary) return primary;
 
     // This branch should not happen after setting DEFAULT_CLOUD_BASE, but keep as safety fallback.
