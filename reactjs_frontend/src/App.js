@@ -28,9 +28,24 @@ function App() {
 
   // Resolve API base from env or default
   const API_BASE = useMemo(() => {
-    const base =
-      process.env.REACT_APP_API_BASE?.replace(/\/*$/, '') || 'http://localhost:3001';
-    return base;
+    // Resolve API base from env or derive from window location to avoid mixed-content issues
+    const envBase = process.env.REACT_APP_API_BASE?.replace(/\/*$/, '');
+    if (envBase) return envBase;
+
+    try {
+      const { protocol, hostname } = window.location;
+      const isLocal = ['localhost', '127.0.0.1'].includes(hostname);
+      // Use localhost default in local dev; otherwise, align protocol/host and use port 3001 (backend)
+      if (isLocal) {
+        return 'http://localhost:3001';
+      }
+      // For cloud environments, default to same host with backend port 3001
+      const derived = `${protocol}//${hostname}:3001`;
+      return derived;
+    } catch {
+      // Fallback
+      return 'http://localhost:3001';
+    }
   }, []);
 
   // Effect to apply theme to document element
@@ -111,19 +126,22 @@ function App() {
         body: JSON.stringify({ message }),
       };
 
-      // Attempt primary endpoint
+      // Prefer /api/message to avoid ad-blockers, then fallback to /api/chat
       try {
-        const res = await fetch(`${API_BASE}/api/chat`, payload);
-        if (res.ok) return res;
-        await res.text().catch(() => '');
-        // proceed to fallback
+        const resMsg = await fetch(`${API_BASE}/api/message`, payload);
+        if (resMsg.ok) return resMsg;
+        await resMsg.text().catch(() => '');
       } catch {
-        // Network/CORS errors fall through to fallback
+        // ignore and try fallback
       }
 
-      // Fallback endpoint
-      const res2 = await fetch(`${API_BASE}/api/message`, payload);
-      return res2;
+      try {
+        const resChat = await fetch(`${API_BASE}/api/chat`, payload);
+        return resChat;
+      } catch (e) {
+        // Surface the last error to caller for friendly message
+        throw e;
+      }
     },
     [API_BASE]
   );
