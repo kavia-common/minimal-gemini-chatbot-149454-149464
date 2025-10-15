@@ -5,11 +5,11 @@ import './App.css';
  * PUBLIC_INTERFACE
  * App provides a minimal chat UI that posts to a backend and shows the latest bot reply.
  * Enhancements:
- * - Robust API base resolution via REACT_APP_API_BASE or fallback http://localhost:3001
+ * - Hard-set cloud API base default with env override
  * - Health check on mount and before sending
- * - Dual-endpoint POST strategy: try /api/chat then fallback to /api/message
+ * - Dual-endpoint POST strategy: try /api/message then fallback to /api/chat
  * - Improved error handling for network/CORS vs HTTP errors
- * - Simple backend connectivity status indicator
+ * - Simple backend connectivity status indicator and visible "API: <base>" hint
  */
 // PUBLIC_INTERFACE
 function App() {
@@ -26,24 +26,21 @@ function App() {
   const [healthy, setHealthy] = useState(false);
   const [healthMsg, setHealthMsg] = useState('');
 
-  // Resolve API base from env or default
+  // Resolve API base: env first, then fixed cloud default, else same-host:3001 fallback
   const API_BASE = useMemo(() => {
-    // Resolve API base from env or derive from window location to avoid mixed-content issues
-    const envBase = process.env.REACT_APP_API_BASE?.replace(/\/*$/, '');
-    if (envBase) return envBase;
+    const ENV_BASE = (process.env.REACT_APP_API_BASE || '').trim();
+    const DEFAULT_CLOUD_BASE = 'https://vscode-internal-23153-beta.beta01.cloud.kavia.ai:3001';
+    const primary = (ENV_BASE || DEFAULT_CLOUD_BASE).replace(/\/*$/, '');
+    if (primary) return primary;
 
+    // This branch should not happen after setting DEFAULT_CLOUD_BASE, but keep as safety fallback.
     try {
-      const { protocol, hostname } = window.location;
-      const isLocal = ['localhost', '127.0.0.1'].includes(hostname);
-      // Use localhost default in local dev; otherwise, align protocol/host and use port 3001 (backend)
-      if (isLocal) {
+      const { protocol, hostname } = window.location || {};
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return 'http://localhost:3001';
       }
-      // For cloud environments, default to same host with backend port 3001
-      const derived = `${protocol}//${hostname}:3001`;
-      return derived;
+      return `${protocol}//${hostname}:3001`;
     } catch {
-      // Fallback
       return 'http://localhost:3001';
     }
   }, []);
@@ -90,7 +87,7 @@ function App() {
       const res = await fetch(`${API_BASE}/`, {
         method: 'GET',
         cache: 'no-store',
-        signal: controller.signal,
+        signal: controller.signal
       });
       clearTimeout(id);
 
@@ -115,31 +112,32 @@ function App() {
   }, [checkHealth]);
 
   /**
-   * Try to POST to /api/chat. If that fails due to network-level issues or non-OK,
-   * automatically try /api/message.
+   * Try to POST to /api/message first, then fallback to /api/chat.
    */
   const postWithFallback = useCallback(
     async (message) => {
       const payload = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message })
       };
 
-      // Prefer /api/message to avoid ad-blockers, then fallback to /api/chat
+      // Primary: /api/message
       try {
         const resMsg = await fetch(`${API_BASE}/api/message`, payload);
         if (resMsg.ok) return resMsg;
+        // consume body to free resources; ignore
         await resMsg.text().catch(() => '');
       } catch {
         // ignore and try fallback
       }
 
+      // Fallback: /api/chat
       try {
         const resChat = await fetch(`${API_BASE}/api/chat`, payload);
         return resChat;
       } catch (e) {
-        // Surface the last error to caller for friendly message
+        // Surface last error
         throw e;
       }
     },
@@ -210,11 +208,11 @@ function App() {
     <div
       className="status"
       role="status"
-      aria-label={`Backend status: ${healthy ? 'Healthy' : 'Unreachable'}. ${healthMsg || ''}`}
-      title={`Backend: ${healthy ? 'Healthy' : 'Unreachable'} — ${healthMsg || 'No details'}`}
+      aria-label={`Backend status: ${healthy ? 'Connected' : 'Not reachable'}. ${healthMsg || ''}`}
+      title={`Backend: ${healthy ? 'Connected' : 'Not reachable'} — ${healthMsg || 'No details'}`}
     >
       <span className={`status-dot ${healthy ? 'ok' : 'bad'}`} aria-hidden="true" />
-      <span className="status-text">{healthy ? 'Healthy' : 'Offline'}</span>
+      <span className="status-text">{healthy ? 'Connected' : 'Not reachable'}</span>
     </div>
   );
 
