@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import './App.css';
 
 /**
  * PUBLIC_INTERFACE
  * App provides a minimal chat UI that posts to a backend and shows the latest bot reply.
- * - Input at bottom, display area above.
- * - Calls POST http://localhost:3001/api/chat with { message } and expects { reply }.
+ * Enhancements:
+ * - Robust API base resolution via REACT_APP_API_BASE or fallback http://localhost:3001
+ * - Health check on mount and before sending
+ * - Dual-endpoint POST strategy: try /api/chat then fallback to /api/message
+ * - Improved error handling for network/CORS vs HTTP errors
+ * - Simple backend connectivity status indicator
  */
+// PUBLIC_INTERFACE
 function App() {
   // Theme support (retain light/dark from template)
   const [theme, setTheme] = useState('light');
@@ -16,6 +21,17 @@ function App() {
   const [botReply, setBotReply] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Backend health/status
+  const [healthy, setHealthy] = useState(false);
+  const [healthMsg, setHealthMsg] = useState('');
+
+  // Resolve API base from env or default
+  const API_BASE = useMemo(() => {
+    const base =
+      process.env.REACT_APP_API_BASE?.replace(/\/*$/, '') || 'http://localhost:3001';
+    return base;
+  }, []);
 
   // Effect to apply theme to document element
   useEffect(() => {
@@ -27,29 +43,127 @@ function App() {
     setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
   };
 
+  /**
+   * Detect common network/CORS/ad-block errors and return a user-friendly message.
+   */
+  const getFriendlyNetworkError = useCallback((err) => {
+    const message = String(err?.message || err || '');
+    const isTypeError = err instanceof TypeError || /TypeError/i.test(message);
+    const isBlocked = /ERR_BLOCKED_BY_CLIENT|net::ERR_BLOCKED_BY_CLIENT/i.test(message);
+    const isCors = /CORS|No 'Access-Control-Allow-Origin'|Access-Control-Allow-Origin/i.test(message);
+
+    if (isBlocked) {
+      return 'The request was blocked by a browser extension (ad/tracker blocker). Please disable it for this site or allow the API domain, then try again.';
+    }
+    if (isCors) {
+      return 'The request appears to be blocked by CORS policy. Ensure the backend includes proper CORS headers and the API base URL is correct.';
+    }
+    if (isTypeError) {
+      return 'Network error: Unable to reach the server. Verify the backend is running and reachable, and check ad blockers.';
+    }
+    return message || 'An unknown error occurred.';
+  }, []);
+
+  /**
+   * PUBLIC_INTERFACE
+   * Health check GET to the API base '/'.
+   */
+  const checkHealth = useCallback(async () => {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 8000); // safety timeout
+      const res = await fetch(`${API_BASE}/`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      clearTimeout(id);
+
+      if (!res.ok) {
+        setHealthy(false);
+        setHealthMsg(`Health check failed: HTTP ${res.status}`);
+        return false;
+      }
+      setHealthy(true);
+      setHealthMsg('Healthy');
+      return true;
+    } catch (err) {
+      setHealthy(false);
+      setHealthMsg(getFriendlyNetworkError(err));
+      return false;
+    }
+  }, [API_BASE, getFriendlyNetworkError]);
+
+  // Initial health check on mount
+  useEffect(() => {
+    checkHealth();
+  }, [checkHealth]);
+
+  /**
+   * Try to POST to /api/chat. If that fails due to network-level issues or non-OK,
+   * automatically try /api/message.
+   */
+  const postWithFallback = useCallback(
+    async (message) => {
+      const payload = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      };
+
+      // Attempt primary endpoint
+      try {
+        const res = await fetch(`${API_BASE}/api/chat`, payload);
+        if (res.ok) return res;
+        await res.text().catch(() => '');
+        // proceed to fallback
+      } catch {
+        // Network/CORS errors fall through to fallback
+      }
+
+      // Fallback endpoint
+      const res2 = await fetch(`${API_BASE}/api/message`, payload);
+      return res2;
+    },
+    [API_BASE]
+  );
+
   // PUBLIC_INTERFACE
   async function sendMessage(message) {
     /**
-     * Sends the user's message to the backend and updates botReply or error state.
+     * Sends the user's message to the backend with health check and fallback endpoints.
      */
     if (!message || !message.trim()) return;
     setLoading(true);
     setError(null);
 
     try {
-      const API_BASE =
-        process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'http://localhost:3001';
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ message })
-      });
+      // Quick health check before sending to provide better UX
+      const ok = await checkHealth();
+      if (!ok) {
+        throw new Error(
+          'Cannot reach backend. Please ensure the server is running at the configured API base.'
+        );
+      }
+
+      const res = await postWithFallback(message);
 
       if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(text || `Request failed with status ${res.status}`);
+        // Try to parse error body for details
+        let detail = '';
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const j = await res.json();
+            detail = j?.error || j?.message || '';
+          } else {
+            detail = await res.text();
+          }
+        } catch {
+          // ignore parse errors
+        }
+        const baseMsg = `Request failed with status ${res.status}`;
+        throw new Error(detail ? `${baseMsg}: ${detail}` : baseMsg);
       }
 
       const data = await res.json();
@@ -59,7 +173,10 @@ function App() {
       setBotReply(data.reply);
       setUserInput('');
     } catch (e) {
-      setError(e.message || 'Something went wrong.');
+      const friendly = getFriendlyNetworkError(e);
+      const hint =
+        ` If the issue persists, confirm the API base URL is correct (current: ${API_BASE}) and try disabling ad blockers for this site.`;
+      setError(friendly + hint);
     } finally {
       setLoading(false);
     }
@@ -69,6 +186,19 @@ function App() {
     e.preventDefault();
     sendMessage(userInput);
   };
+
+  // Small status indicator component
+  const StatusIndicator = () => (
+    <div
+      className="status"
+      role="status"
+      aria-label={`Backend status: ${healthy ? 'Healthy' : 'Unreachable'}. ${healthMsg || ''}`}
+      title={`Backend: ${healthy ? 'Healthy' : 'Unreachable'} — ${healthMsg || 'No details'}`}
+    >
+      <span className={`status-dot ${healthy ? 'ok' : 'bad'}`} aria-hidden="true" />
+      <span className="status-text">{healthy ? 'Healthy' : 'Offline'}</span>
+    </div>
+  );
 
   return (
     <div className="App" aria-live="polite">
@@ -83,7 +213,14 @@ function App() {
 
         <div className="container">
           <h1 className="title">Gemini Chat</h1>
-          <p className="subtitle">Ask a question and get a response.</p>
+          <p className="subtitle">
+            Ask a question and get a response.&nbsp;
+            <span className="api-hint" title={`API Base: ${API_BASE}`}>
+              (API: {API_BASE})
+            </span>
+          </p>
+
+          <StatusIndicator />
 
           <div className="chat-surface" role="region" aria-label="Chatbot reply">
             {!botReply && !error && !loading && (
@@ -131,6 +268,10 @@ function App() {
               className="btn-primary"
               disabled={loading || !userInput.trim()}
               aria-busy={loading ? 'true' : 'false'}
+              onClick={() => {
+                // Re-run a quick health check when pressing Send to refresh indicator.
+                checkHealth();
+              }}
             >
               {loading ? 'Sending...' : 'Send'}
             </button>

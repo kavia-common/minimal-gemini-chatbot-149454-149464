@@ -11,6 +11,7 @@
   --muted: #6b7280;
   --border: #e5e7eb;
   --shadow: 0 10px 20px rgba(0,0,0,0.06), 0 6px 6px rgba(0,0,0,0.06);
+  --success: #10B981;
 }
 
 [data-theme="dark"] {
@@ -88,6 +89,36 @@
   margin: 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.api-hint {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Status indicator */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid var(--border);
+}
+.status-dot.ok {
+  background: var(--success);
+}
+.status-dot.bad {
+  background: var(--error);
+}
+.status-text {
+  user-select: none;
 }
 
 /* Chat Surface */
