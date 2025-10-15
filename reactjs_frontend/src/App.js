@@ -37,7 +37,9 @@ function App() {
     setError(null);
 
     try {
-      const res = await fetch('http://localhost:3001/api/chat', {
+      const API_BASE =
+        process.env.REACT_APP_API_BASE?.replace(/\/+$/, '') || 'http://localhost:3001';
+      const res = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
